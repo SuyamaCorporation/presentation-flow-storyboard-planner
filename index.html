@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>プレゼンフロー 絵コンテプランナー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0f172a; }
+  .slide-card { transition: all 0.2s; }
+  .slide-card:hover { transform: translateY(-2px); }
+  input, textarea, select { color-scheme: dark; }
+  .structure-btn.active { ring: 2px; }
+</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+
+<div class="max-w-5xl mx-auto p-4">
+  <div class="text-center mb-6">
+    <h1 class="text-3xl font-bold text-blue-400 mb-1">🎬 プレゼンフロープランナー</h1>
+    <p class="text-slate-400 text-sm">スライド構成を絵コンテ感覚で設計</p>
+  </div>
+
+  <!-- Setup panel -->
+  <div id="setup-panel" class="bg-slate-800 rounded-xl p-6 mb-6">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <div>
+        <label class="text-slate-400 text-xs mb-1 block">スライド枚数</label>
+        <input id="slide-count" type="number" min="3" max="40" value="10"
+          class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+          oninput="onSetupChange()">
+      </div>
+      <div>
+        <label class="text-slate-400 text-xs mb-1 block">総発表時間 (分)</label>
+        <input id="total-time" type="number" min="1" max="120" value="15"
+          class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+          oninput="onSetupChange()">
+      </div>
+      <div class="col-span-2">
+        <label class="text-slate-400 text-xs mb-1 block">構成テンプレート</label>
+        <div class="flex gap-2">
+          <button onclick="applyTemplate('kishow')" id="btn-kishow"
+            class="flex-1 px-3 py-2 bg-slate-700 hover:bg-blue-700 border border-slate-600 hover:border-blue-500 rounded text-sm transition">
+            📖 起承転結
+          </button>
+          <button onclick="applyTemplate('mondai')" id="btn-mondai"
+            class="flex-1 px-3 py-2 bg-slate-700 hover:bg-purple-700 border border-slate-600 hover:border-purple-500 rounded text-sm transition">
+            🔍 問題→解決
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary bar -->
+    <div class="flex gap-4 text-sm border-t border-slate-700 pt-4">
+      <span class="text-slate-400">合計時間: <span id="total-time-used" class="text-green-400 font-mono">0</span>/<span id="total-time-alloc" class="font-mono">15</span> 分</span>
+      <span class="text-slate-400">スライド: <span id="slide-count-display" class="text-blue-400 font-mono">10</span> 枚</span>
+      <span id="time-warn" class="text-yellow-400 text-xs" style="display:none">⚠️ 時間超過</span>
+    </div>
+  </div>
+
+  <!-- Slides grid -->
+  <div id="slides-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"></div>
+
+  <!-- Export -->
+  <div class="bg-slate-800 rounded-xl p-4">
+    <div class="flex gap-3 items-center">
+      <button onclick="exportText()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition">📋 テキスト出力</button>
+      <button onclick="clearAll()" class="px-4 py-2 bg-slate-700 hover:bg-red-800 rounded text-sm transition">🗑️ リセット</button>
+    </div>
+    <pre id="export-out" class="mt-3 bg-slate-900 rounded p-3 text-xs text-slate-300 font-mono whitespace-pre-wrap" style="display:none"></pre>
+  </div>
+</div>
+
+<script>
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+const SECTION_COLORS = {
+  '起': 'border-green-500 bg-green-900/20',
+  '承': 'border-blue-500 bg-blue-900/20',
+  '転': 'border-orange-500 bg-orange-900/20',
+  '結': 'border-purple-500 bg-purple-900/20',
+  '問題': 'border-red-500 bg-red-900/20',
+  '原因': 'border-orange-500 bg-orange-900/20',
+  '解決': 'border-green-500 bg-green-900/20',
+  '行動': 'border-blue-500 bg-blue-900/20',
+  '': 'border-slate-600 bg-slate-800/50',
+};
+
+const SECTION_BADGE = {
+  '起': 'bg-green-800 text-green-200',
+  '承': 'bg-blue-800 text-blue-200',
+  '転': 'bg-orange-800 text-orange-200',
+  '結': 'bg-purple-800 text-purple-200',
+  '問題': 'bg-red-800 text-red-200',
+  '原因': 'bg-orange-800 text-orange-200',
+  '解決': 'bg-green-800 text-green-200',
+  '行動': 'bg-blue-800 text-blue-200',
+  '': 'bg-slate-700 text-slate-300',
+};
+
+let slides = [];
+
+function loadData() {
+  try { return JSON.parse(localStorage.getItem('pf_data') || 'null'); } catch(e) { return null; }
+}
+function saveData() {
+  localStorage.setItem('pf_data', JSON.stringify({ slides, count: slides.length, totalTime: parseInt(document.getElementById('total-time').value)||15 }));
+}
+
+function initSlides(count, template) {
+  const n = parseInt(count) || 10;
+  const time = Math.floor((parseInt(document.getElementById('total-time').value)||15) * 60 / n / 60 * 10) / 10;
+
+  if (template === 'kishow') {
+    const sections = ['起','起','承','承','承','転','転','結','結','結'];
+    slides = Array.from({length: n}, (_, i) => ({
+      id: i+1,
+      section: sections[Math.round(i/(n-1)*(sections.length-1))] || '',
+      message: '',
+      time: parseFloat((parseInt(document.getElementById('total-time').value)||15) / n).toFixed(1),
+      note: ''
+    }));
+  } else if (template === 'mondai') {
+    const sections = ['問題','問題','原因','原因','解決','解決','解決','行動','行動','行動'];
+    slides = Array.from({length: n}, (_, i) => ({
+      id: i+1,
+      section: sections[Math.round(i/(n-1)*(sections.length-1))] || '',
+      message: '',
+      time: parseFloat((parseInt(document.getElementById('total-time').value)||15) / n).toFixed(1),
+      note: ''
+    }));
+  } else {
+    slides = Array.from({length: n}, (_, i) => ({
+      id: i+1, section: '', message: '', time: parseFloat((parseInt(document.getElementById('total-time').value)||15) / n).toFixed(1), note: ''
+    }));
+  }
+}
+
+function renderSlides() {
+  const grid = document.getElementById('slides-grid');
+  grid.innerHTML = '';
+  slides.forEach((sl, idx) => {
+    const colorClass = SECTION_COLORS[sl.section] || SECTION_COLORS[''];
+    const badgeClass = SECTION_BADGE[sl.section] || SECTION_BADGE[''];
+    const card = document.createElement('div');
+    card.className = 'slide-card border-2 rounded-xl p-4 ' + colorClass;
+    card.innerHTML = `
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400 font-mono text-sm">#${escHtml(String(sl.id))}</span>
+          ${sl.section ? `<span class="px-2 py-0.5 rounded text-xs font-bold ${badgeClass}">${escHtml(sl.section)}</span>` : ''}
+        </div>
+        <div class="flex items-center gap-1">
+          <span class="text-slate-500 text-xs">⏱</span>
+          <input type="number" min="0.5" max="30" step="0.5"
+            class="w-14 bg-slate-700/50 border border-slate-600 rounded px-1 py-0.5 text-xs text-center focus:outline-none focus:border-blue-500"
+            value="${escHtml(String(sl.time))}"
+            oninput="updateSlide(${idx},'time',this.value);updateTotalTime()">
+          <span class="text-slate-500 text-xs">分</span>
+        </div>
+      </div>
+      <div class="mb-2">
+        <input type="text" placeholder="キーメッセージ（1行で言うと？）"
+          class="w-full bg-slate-700/50 border border-slate-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500"
+          value="${escHtml(sl.message)}"
+          oninput="updateSlide(${idx},'message',this.value)">
+      </div>
+      <div>
+        <select class="w-full bg-slate-700/50 border border-slate-600 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
+          onchange="updateSlideSection(${idx},this.value)">
+          <option value="">-- セクション --</option>
+          <option value="起" ${sl.section==='起'?'selected':''}>起</option>
+          <option value="承" ${sl.section==='承'?'selected':''}>承</option>
+          <option value="転" ${sl.section==='転'?'selected':''}>転</option>
+          <option value="結" ${sl.section==='結'?'selected':''}>結</option>
+          <option value="問題" ${sl.section==='問題'?'selected':''}>問題</option>
+          <option value="原因" ${sl.section==='原因'?'selected':''}>原因</option>
+          <option value="解決" ${sl.section==='解決'?'selected':''}>解決</option>
+          <option value="行動" ${sl.section==='行動'?'selected':''}>行動</option>
+        </select>
+      </div>`;
+    grid.appendChild(card);
+  });
+  updateTotalTime();
+}
+
+function updateSlide(idx, field, val) {
+  slides[idx][field] = val;
+  saveData();
+}
+
+function updateSlideSection(idx, val) {
+  slides[idx].section = val;
+  saveData();
+  renderSlides();
+}
+
+function updateTotalTime() {
+  const total = slides.reduce((s, sl) => s + (parseFloat(sl.time)||0), 0);
+  const alloc = parseInt(document.getElementById('total-time').value)||15;
+  document.getElementById('total-time-used').textContent = total.toFixed(1);
+  document.getElementById('total-time-alloc').textContent = alloc;
+  document.getElementById('time-warn').style.display = total > alloc ? 'inline' : 'none';
+}
+
+function onSetupChange() {
+  const count = parseInt(document.getElementById('slide-count').value)||10;
+  document.getElementById('slide-count-display').textContent = count;
+  if (slides.length !== count) {
+    initSlides(count, '');
+    renderSlides();
+  }
+  updateTotalTime();
+  saveData();
+}
+
+function applyTemplate(tpl) {
+  const count = parseInt(document.getElementById('slide-count').value)||10;
+  initSlides(count, tpl);
+  renderSlides();
+  saveData();
+}
+
+function exportText() {
+  let out = `プレゼン構成（${slides.length}枚/${document.getElementById('total-time').value}分）\n\n`;
+  slides.forEach(sl => {
+    out += `[${sl.id}] ${sl.section||'--'} (${sl.time}分)\n`;
+    out += `  → ${sl.message || '（未入力）'}\n\n`;
+  });
+  const el = document.getElementById('export-out');
+  el.textContent = out;
+  el.style.display = 'block';
+}
+
+function clearAll() {
+  if (!confirm('すべてリセットしますか？')) return;
+  localStorage.removeItem('pf_data');
+  initSlides(10, '');
+  document.getElementById('slide-count').value = 10;
+  document.getElementById('total-time').value = 15;
+  renderSlides();
+  document.getElementById('export-out').style.display = 'none';
+}
+
+// Init
+const saved = loadData();
+if (saved && saved.slides && saved.slides.length > 0) {
+  slides = saved.slides;
+  document.getElementById('slide-count').value = slides.length;
+  if (saved.totalTime) document.getElementById('total-time').value = saved.totalTime;
+} else {
+  initSlides(10, 'kishow');
+}
+document.getElementById('slide-count-display').textContent = slides.length;
+renderSlides();
+</script>
+</body>
+</html>
